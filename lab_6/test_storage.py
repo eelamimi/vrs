@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Юнит-тесты Storage (без сети; Lab 5 + snapshot/сжатие Lab 6):  python test_storage.py"""
 import os
-import shutil
 import tempfile
 
 from storage import Storage, StorageError
+
+TEST_TEMP_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "test_temp")
+)
+os.makedirs(TEST_TEMP_ROOT, exist_ok=True)
 
 
 def entry(i, term=1, key="k"):
@@ -13,7 +17,7 @@ def entry(i, term=1, key="k"):
 
 
 def fresh():
-    return tempfile.mkdtemp(prefix="stor_")
+    return tempfile.mkdtemp(prefix="stor_", dir=TEST_TEMP_ROOT)
 
 
 def test_empty_dir():
@@ -66,12 +70,12 @@ def test_torn_tail_is_dropped():
     s.append_entries([entry(1), entry(2)])
     s.close()
     with open(os.path.join(d, "log.jsonl"), "ab") as f:
-        f.write(b'0badc0de\t{"term":1,"index":3,"comm')          # оборванная запись
+        f.write(b'0badc0de\t{"term":1,"index":3,"comm')  # оборванная запись
     s2 = Storage(d)
     log = s2.load()["log"]
     assert [e["index"] for e in log] == [1, 2]
     assert s2.stats["dropped_bytes"] > 0
-    s2.append_entries([entry(3)])                                 # после восстановления можно писать дальше
+    s2.append_entries([entry(3)])  # после восстановления можно писать дальше
     s2.close()
     assert [e["index"] for e in Storage(d).load()["log"]] == [1, 2, 3]
 
@@ -81,14 +85,14 @@ def test_corrupt_crc_truncates_from_damage():
     s = Storage(d)
     s.load()
     s.append_entries([entry(i) for i in range(1, 5)])
-    off = s.offsets[1]                                            # начало записи 2
+    off = s.offsets[1]  # начало записи 2
     s.close()
     p = os.path.join(d, "log.jsonl")
     data = bytearray(open(p, "rb").read())
-    data[off + 12] ^= 0xFF                                        # портим байт внутри записи 2
+    data[off + 12] ^= 0xFF  # портим байт внутри записи 2
     open(p, "wb").write(bytes(data))
     log = Storage(d).load()["log"]
-    assert [e["index"] for e in log] == [1], log                  # 2,3,4 недостоверны
+    assert [e["index"] for e in log] == [1], log  # 2,3,4 недостоверны
 
 
 def test_corrupt_meta_gives_defaults():
@@ -138,7 +142,8 @@ def test_index_gap_rejected():
 
 # ------------------------------------------------------------------ Lab 6: snapshot / сжатие
 def snap_args(n, term=1):
-    return n, term, {f"k{i}": i for i in range(1, n + 1)}, {"c": {"req_id": n, "index": n, "term": term, "key": f"k{n}"}}
+    return n, term, {f"k{i}": i for i in range(1, n + 1)}, {
+        "c": {"req_id": n, "index": n, "term": term, "key": f"k{n}"}}
 
 
 def test_snapshot_roundtrip():
@@ -164,7 +169,7 @@ def test_compaction_then_reload_and_append():
     s.append_entries([entry(i) for i in range(1, 9)])
     s.save_snapshot(*snap_args(5))
     s.compact_log([entry(6), entry(7), entry(8)], 5)
-    s.append_entries([entry(9)])                         # лог продолжается с учётом base
+    s.append_entries([entry(9)])  # лог продолжается с учётом base
     s.close()
     st = Storage(d).load()
     assert st["snapshot"]["last_included_index"] == 5
@@ -178,7 +183,7 @@ def test_truncate_after_compaction():
     s.append_entries([entry(i) for i in range(1, 7)])
     s.save_snapshot(*snap_args(3))
     s.compact_log([entry(4), entry(5), entry(6)], 3)
-    s.truncate_from(5)                                   # режем 5, 6
+    s.truncate_from(5)  # режем 5, 6
     s.append_entries([entry(5, term=2)])
     s.close()
     log = Storage(d).load()["log"]
@@ -191,7 +196,7 @@ def test_crash_between_snapshot_and_compaction():
     s = Storage(d)
     s.load()
     s.append_entries([entry(i) for i in range(1, 9)])
-    s.save_snapshot(*snap_args(5))                       # <- крах здесь, compact_log не вызван
+    s.save_snapshot(*snap_args(5))  # <- крах здесь, compact_log не вызван
     s.close()
     s2 = Storage(d)
     st = s2.load()
@@ -209,12 +214,12 @@ def test_snapshot_covers_whole_log():
     s = Storage(d)
     s.load()
     s.append_entries([entry(i) for i in range(1, 4)])
-    s.save_snapshot(*snap_args(10))                      # snapshot ушёл вперёд лога (InstallSnapshot)
+    s.save_snapshot(*snap_args(10))  # snapshot ушёл вперёд лога (InstallSnapshot)
     s.close()
     s2 = Storage(d)
     st = s2.load()
     assert st["log"] == [] and st["commit_index"] == 10
-    s2.append_entries([entry(11)])                       # следующий индекс = 11
+    s2.append_entries([entry(11)])  # следующий индекс = 11
     s2.close()
     assert [e["index"] for e in Storage(d).load()["log"]] == [11]
 

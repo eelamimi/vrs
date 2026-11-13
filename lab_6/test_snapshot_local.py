@@ -55,6 +55,7 @@ def test_restart_restores_state_from_snapshot_plus_tail():
     for i in range(1, 36):
         put(n, f"k{i}", i, rid=i)
     snap_idx, last, log_len = n.snap_idx, n.last_log_index(), len(n.log)
+    n.storage.close()
     del n                                                  # "kill": объект брошен, всё что нужно - на диске
     m = new_node(d, threshold=10)
     assert m.snap_idx == snap_idx and m.last_log_index() == last and len(m.log) == log_len
@@ -74,6 +75,7 @@ def test_idempotency_survives_snapshot_and_restart():
     for i in range(2, 30):                                 # чужая нагрузка -> snapshot уйдёт за запись alice
         put(n, f"k{i}", i, cid="bob", rid=i)
     assert n.snap_idx > first["index"], "запись alice должна оказаться внутри snapshot'а"
+    n.storage.close()
     m = new_node(d, threshold=8)
     lead(m)
     again = m.handle_put({"type": "PUT", "key": "x", "value": 999, "client_id": "alice", "req_id": 1})
@@ -184,6 +186,7 @@ def test_install_snapshot_replaces_state():
     assert f.snap_idx == 50 and f.last_applied == f.commit_index == 50 and f.log == []
     assert f.state == {"a": 1, "b": 2} and f.last_req["c"]["req_id"] == 7
     assert f.last_log_index() == 50 and f.last_log_term() == 1
+    f.storage.close()
     g = Node(2, cluster, d, snapshot_threshold=1000, metrics_interval=3600)     # рестарт
     assert g.snap_idx == 50 and g.state == {"a": 1, "b": 2} and g.last_applied == 50
     # повторная установка более старого snapshot'а - игнорируется (уже закоммичено)
