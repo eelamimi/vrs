@@ -7,7 +7,7 @@
                        <crc32 hex>\t<json записи>\n
     commit.json    {"commit_index"} - подсказка (без fsync, см. Lab 5)
     snapshot.json  {"last_included_index", "last_included_term", "state", "last_req"}
-                   атомарная запись: tmp -> fsync -> os.replace -> fsync(каталога)
+                   атомарная запись: tmp -> fsync -> self._atomic_replace -> fsync(каталога)
     metrics.log    строки METRICS (пишет узел, не Storage)
 
 Инвариант сжатия лога (порядок операций ВАЖЕН):
@@ -130,6 +130,18 @@ class Storage:
             self.stats["snapshot_corrupt"] = True
             return None
 
+    @staticmethod
+    def _atomic_replace(tmp, dst):
+        last_err = None
+        for _ in range(40):
+            try:
+                os.replace(tmp, dst)
+                return
+            except PermissionError as e:
+                last_err = e
+                time.sleep(0.05)
+        raise last_err
+
     def _load_log(self):
         log, self.offsets, self.base = [], [], 0
         good_end = 0
@@ -200,7 +212,7 @@ class Storage:
             json.dump({"current_term": current_term, "voted_for": voted_for}, f)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, self.meta_path)
+        self._atomic_replace(tmp, self.meta_path)
         _fsync_dir(self.dir)
         self.stats["meta_writes"] += 1
         self.stats["fsyncs"] += 1
@@ -209,7 +221,7 @@ class Storage:
         tmp = self.commit_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"commit_index": commit_index}, f)
-        os.replace(tmp, self.commit_path)
+        self._atomic_replace(tmp, self.commit_path)
 
     # ------------------------------------------------------------ snapshot
     def save_snapshot(self, last_included_index, last_included_term, state, last_req):
@@ -221,7 +233,7 @@ class Storage:
                        "state": state, "last_req": last_req}, f, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, self.snap_path)
+        self._atomic_replace(tmp, self.snap_path)
         _fsync_dir(self.dir)
         self.stats["snapshots_written"] += 1
         self.stats["fsyncs"] += 1
@@ -245,7 +257,17 @@ class Storage:
                 f.write(line)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, self.log_path)
+
+        # Windows: os.replace не может заменить файл, пока он открыт хоть одним handle,
+        # даже нашим собственным self._f. Закрываем перед заменой.
+        if self._f is not None:
+            try:
+                self._f.close()
+            except OSError:
+                pass
+            self._f = None
+
+        self._atomic_replace(tmp, self.log_path)
         _fsync_dir(self.dir)
         self.offsets = offsets
         self.base = base

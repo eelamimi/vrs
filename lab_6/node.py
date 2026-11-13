@@ -5,8 +5,9 @@ Lab 6. Snapshots, сжатие лога, наблюдаемость. Разви�
 Запуск:
     python node.py 1 [--snapshot-threshold 50] [--metrics-interval 3]
     python node.py 2 --cluster 1:9001,2:9002,3:9003,4:9004,5:9005
-    python node.py 1 --data-dir data          # каталог узла: data/node1/  (по умолчанию)
-    python node.py 1 --data data/node1        # либо явный путь
+    python node.py 1                          # данные пишутся в ../temp/node1/ (от папки проекта)
+    python node.py 1 --data-dir some/root     # другой корень: some/root/node1/
+    python node.py 1 --data some/dir          # либо явный каталог узла
 
 Что добавлено относительно Lab 5:
   * Snapshot: когда len(log) >= SNAPSHOT_THRESHOLD, узел (любой, после apply) сохраняет
@@ -42,14 +43,16 @@ import time
 
 from storage import Storage
 
-T0 = time.time()                       # момент старта процесса (для "время до готовности")
+T0 = time.time()  # момент старта процесса (для "время до готовности")
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DATA_ROOT = os.path.join(HERE, "..", "temp")  # данные узлов: ../temp/node<id>/ (от папки проекта)
 
 HEARTBEAT_INTERVAL = 0.5
 ELECTION_TIMEOUT = (2.5, 4.5)
 RPC_TIMEOUT = 1.0
 PUT_TIMEOUT = 5.0
 MAX_BATCH = 50
-SNAPSHOT_THRESHOLD = 50                # длина лога (в памяти), после которой делаем snapshot
+SNAPSHOT_THRESHOLD = 50  # длина лога (в памяти), после которой делаем snapshot
 METRICS_INTERVAL_SEC = 3.0
 
 DEFAULT_CLUSTER = "1:9001,2:9002,3:9003"
@@ -75,15 +78,15 @@ class Node:
         self.metrics_interval = metrics_interval
 
         # --- snapshot (в памяти) ---
-        self.snap_idx = 0              # last_included_index
-        self.snap_term = 0             # last_included_term
-        self.snap_data = {"state": {}, "last_req": {}}   # копия, неизменяемая после создания
+        self.snap_idx = 0  # last_included_index
+        self.snap_term = 0  # last_included_term
+        self.snap_data = {"state": {}, "last_req": {}}  # копия, неизменяемая после создания
         self.snapshots_taken = 0
         self.snapshots_installed = 0
 
         # --- volatile
         self.state = {}
-        self.last_req = {}             # client_id -> {req_id, index, term, key}; меняется только в apply
+        self.last_req = {}  # client_id -> {req_id, index, term, key}; меняется только в apply
         self.req_map = {}
         self.last_applied = 0
         self.role = "follower"
@@ -108,7 +111,7 @@ class Node:
         saved = self.storage.load()
         self.term = saved["current_term"]
         self.voted_for = saved["voted_for"]
-        self.log = saved["log"]                       # хвост: index = snap_idx+1, ...
+        self.log = saved["log"]  # хвост: index = snap_idx+1, ...
         snap = saved["snapshot"]
         if snap:
             self.snap_idx = snap["last_included_index"]
@@ -329,8 +332,8 @@ class Node:
             else:
                 remaining = []
             state, last_req = copy.deepcopy(msg["state"]), copy.deepcopy(msg["last_req"])
-            self.storage.save_snapshot(idx, sterm, state, last_req)       # (1) snapshot на диск
-            self.log = remaining                                          # (2) обрезка лога
+            self.storage.save_snapshot(idx, sterm, state, last_req)  # (1) snapshot на диск
+            self.log = remaining  # (2) обрезка лога
             self.storage.compact_log(self.log, idx)
             self.snap_idx, self.snap_term = idx, sterm
             self.snap_data = {"state": copy.deepcopy(state), "last_req": copy.deepcopy(last_req)}
@@ -547,7 +550,7 @@ class Node:
             for k, e in enumerate(msg["entries"]):
                 idx = prev_idx + 1 + k
                 if idx <= self.snap_idx:
-                    continue                                   # уже внутри snapshot'а
+                    continue  # уже внутри snapshot'а
                 if idx <= self.last_log_index():
                     if self.term_at(idx) == e["term"]:
                         continue
@@ -597,7 +600,7 @@ class Node:
                 return self._not_leader()
             term = self.term
 
-            sess = self.last_req.get(cid)            # last_req переживает snapshot и рестарт
+            sess = self.last_req.get(cid)  # last_req переживает snapshot и рестарт
             if sess and rid == sess["req_id"]:
                 self.log_msg(f"PUT ({cid}, {rid}): повтор, уже применён на idx={sess['index']} "
                              f"- возвращаю прежний результат")
@@ -621,7 +624,7 @@ class Node:
                 os._exit(1)
             for ev in self.wake.values():
                 ev.set()
-            self._advance_commit()                   # кластер из одного узла коммитит сам
+            self._advance_commit()  # кластер из одного узла коммитит сам
 
             deadline = time.time() + PUT_TIMEOUT
             while True:
@@ -778,7 +781,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Lab 6: узел кластера (Raft + snapshots + метрики)")
     ap.add_argument("node_id", type=int)
     ap.add_argument("--cluster", default=DEFAULT_CLUSTER, help="id:port,id:port,...")
-    ap.add_argument("--data-dir", default="data", help="корень; каталог узла = <root>/node<id>")
+    ap.add_argument("--data-dir", default=DEFAULT_DATA_ROOT,
+                    help="корень; каталог узла = <root>/node<id> (по умолчанию ../temp рядом с папкой проекта)")
     ap.add_argument("--data", default=None, help="явный каталог узла (приоритетнее --data-dir)")
     ap.add_argument("--snapshot-threshold", type=int, default=SNAPSHOT_THRESHOLD,
                     help="сжимать лог при len(log) >= N (очень большое N = snapshot'ы выключены)")
@@ -789,5 +793,5 @@ if __name__ == "__main__":
     cluster = parse_cluster(args.cluster)
     if args.node_id not in cluster:
         raise SystemExit(f"ID {args.node_id} нет в --cluster")
-    node_dir = args.data or os.path.join(args.data_dir, f"node{args.node_id}")
+    node_dir = os.path.normpath(args.data or os.path.join(args.data_dir, f"node{args.node_id}"))
     Node(args.node_id, cluster, node_dir, args.snapshot_threshold, args.metrics_interval).start()

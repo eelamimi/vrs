@@ -13,7 +13,7 @@
   5. Идемпотентность после snapshot + рестарта всех узлов
   6. (бонус) InstallSnapshot: follower отстал за границу snapshot'а лидера и догоняется snapshot'ом
 
-Создаёт чистый run/ (data/node*/ и logs/node*.log); в конце печатает таблицу "до/после snapshot".
+Создаёт чистый ../temp/test_run/ (data/node*/ и logs/node*.log; остальное содержимое ../temp не трогает); в конце печатает таблицу "до/после snapshot".
 """
 import os
 import shutil
@@ -25,7 +25,7 @@ import time
 import client as cl
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RUN = os.path.join(HERE, "run")
+RUN = os.path.normpath(os.path.join(HERE, "..", "temp", "test_run"))   # чистится только эта подпапка
 CLUSTER = cl.parse_cluster("1:9001,2:9002,3:9003")
 NO_SNAPSHOT = 10 ** 9
 THRESHOLD = 20
@@ -58,7 +58,10 @@ class Cluster:
     def kill9(self, i):
         p = self.procs.pop(i, None)
         if p and p.poll() is None:
-            p.send_signal(signal.SIGKILL)
+            if os.name == "nt":
+                p.terminate()
+            else:
+                p.send_signal(signal.SIGKILL)
             p.wait()
         print(f"    kill -9 узел {i}")
 
