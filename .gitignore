@@ -3,3 +3,5 @@
 *.json
 *.jsonl
 /*temp*
+*.iml
+*/*.iml
